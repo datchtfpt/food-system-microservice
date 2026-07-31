@@ -1,0 +1,15 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
+
+# Build/output
+target/
+build/
+*.class
+
+# Node
+node_modules/
