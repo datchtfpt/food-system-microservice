@@ -1,0 +1,50 @@
+
+server:
+  port: 8080  # Gateway chạy ở port 8080, tất cả client gọi vào đây
+
+spring:
+  application:
+    name: foody-gateway  # Tên service, dùng để nhận diện trong hệ thống microservices
+  cloud:
+    gateway:
+      routes:
+        # =============================================
+        # ROUTE 1: Điều hướng đến Restaurant Service
+        # Client gọi: http://localhost:8080/restaurant-service/api/...
+        # Gateway forward đến: http://localhost:8081/api/...
+        # =============================================
+        - id: restaurant-service         # Tên định danh của route (đặt tùy ý)
+          uri: http://localhost:8081     # Địa chỉ thật của restaurant-service
+          predicates:
+            - Path=/restaurant-service/** # Bắt tất cả request có prefix /restaurant-service/
+          filters:
+            # Cắt bỏ prefix /restaurant-service/ trước khi forward
+            # VD: /restaurant-service/api/restaurants → /api/restaurants
+            - RewritePath=/restaurant-service/(?<segment>.*), /${segment}
+
+        # =============================================
+        # ROUTE 2: Điều hướng đến Food Service
+        # Client gọi: http://localhost:8080/food-service/api/...
+        # Gateway forward đến: http://localhost:8082/api/...
+        # =============================================
+        - id: food-service               # Tên định danh của route (đặt tùy ý)
+          uri: http://localhost:8082     # Địa chỉ thật của food-service
+          predicates:
+            - Path=/food-service/**      # Bắt tất cả request có prefix /food-service/
+          filters:
+            # Cắt bỏ prefix /food-service/ trước khi forward
+            # VD: /food-service/api/foods → /api/foods
+            - RewritePath=/food-service/(?<segment>.*), /${segment}
+
+# =============================================
+# CẤU HÌNH SWAGGER UI TẬP TRUNG TẠI GATEWAY
+# Truy cập: http://localhost:8080/swagger-ui.html
+# Hiển thị API docs từ tất cả các service con
+# =============================================
+springdoc:
+  swagger-ui:
+    urls:
+      - name: Restaurant API             # Tên hiển thị trên Swagger UI
+        url: /restaurant-service/v3/api-docs  # Lấy API docs từ restaurant-service qua gateway
+      - name: Food API                   # Tên hiển thị trên Swagger UI
+        url: /food-service/v3/api-docs        # Lấy API docs từ food-service qua gateway

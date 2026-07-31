@@ -1,0 +1,417 @@
+================================================================================
+  FOODY SYSTEM - MICROSERVICES ARCHITECTURE CONTEXT
+  Dùng để cung cấp context cho agent khi cần tạo service mới tương tự
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. TỔNG QUAN HỆ THỐNG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hệ thống gồm 3 module chạy độc lập:
+
+  Client (Postman / Frontend)
+       gọi vào port 8080
+  [foody-gateway]        :8080
+       /restaurant-service/**  → forward → :8081
+       /food-service/**        → forward → :8082
+  [restaurant-service]   :8081
+  [food-service]         :8082
+
+Tech stack chung:
+  - Java 17
+  - Spring Boot 4.1.0
+  - Spring Cloud 2025.1.2
+  - Database: Microsoft SQL Server (port 1433)
+  - ORM: Hibernate (Spring Data JPA)
+  - Build tool: Maven
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. MODULE: foody-gateway
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port     : 8080
+Package  : fu.de190913.gateway
+Framework: Spring WebFlux (reactive, non-blocking)
+
+[Dependencies pom.xml]
+  - spring-boot-starter-webflux
+  - spring-cloud-starter-gateway-server-webflux
+  - spring-cloud-starter-openfeign
+  - lombok
+  - springdoc-openapi-starter-webflux-ui:3.0.3
+
+[application.yml]
+  server:
+    port: 8080
+  spring:
+    application:
+      name: foody-gateway
+    cloud:
+      gateway:
+        routes:
+          - id: restaurant-service
+            uri: http://localhost:8081
+            predicates:
+              - Path=/restaurant-service/**
+            filters:
+              - RewritePath=/restaurant-service/(?<segment>.*), /${segment}
+          - id: food-service
+            uri: http://localhost:8082
+            predicates:
+              - Path=/food-service/**
+            filters:
+              - RewritePath=/food-service/(?<segment>.*), /${segment}
+  springdoc:
+    swagger-ui:
+      urls:
+        - name: Restaurant API
+          url: /restaurant-service/v3/api-docs
+        - name: Food API
+          url: /food-service/v3/api-docs
+
+[Cấu trúc package và class]
+  fu.de190913.gateway
+  ├── FoodyGatewayApplication.java  (@SpringBootApplication)
+  └── config/
+      ├── GatewayConfig.java
+      │     @Configuration
+      │     @Bean RouteLocator customRouteLocator(RouteLocatorBuilder builder)
+      │       Cùng chức năng với application.yml nhưng viết bằng Java code:
+      │       .route("restaurant-service", path=/restaurant-service/**, rewrite, uri=8081)
+      │       .route("food-service",       path=/food-service/**,       rewrite, uri=8082)
+      │
+      └── CorsConfig.java
+            @Configuration
+            @Bean CorsWebFilter corsWebFilter()
+              → allowedOriginPattern("*")
+              → allowedMethod("*")
+              → allowedHeader("*")
+              → allowCredentials(true)
+              → registerCorsConfiguration("/**", corsConfig)
+
+[Lưu ý]
+  - Gateway dùng WebFlux (reactive), KHÔNG dùng Spring MVC
+  - Swagger UI tổng hợp: http://localhost:8080/swagger-ui.html
+  - GatewayConfig.java và application.yml đều cấu hình route (trùng nhau).
+    Trong dự án mới chỉ cần dùng 1 trong 2 cách.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. MODULE: restaurant-service
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port     : 8081
+Package  : fa.training.restaurantservice
+Framework: Spring MVC (Servlet-based, Tomcat)
+
+[Dependencies pom.xml]
+  - spring-boot-starter-data-jpa
+  - spring-boot-starter-webmvc
+  - spring-cloud-starter-openfeign
+  - mssql-jdbc (scope=runtime)
+  - lombok (optional=true)
+  - springdoc-openapi-starter-webmvc-ui:2.5.0
+  - spring-cloud-dependencies:2025.1.2 (BOM trong dependencyManagement)
+
+[application.properties]
+  spring.application.name=restaurant-service
+  server.port=8081
+  spring.datasource.url=jdbc:sqlserver://localhost:1433;databaseName=<DB_NAME>;encrypt=false;
+  spring.datasource.username=sa
+  spring.datasource.password=<PASSWORD>
+  spring.datasource.driver-class-name=com.microsoft.sqlserver.jdbc.SQLServerDriver
+  spring.jpa.hibernate.ddl-auto=update
+  spring.jpa.show-sql=true
+  server.forward-headers-strategy=framework
+
+[Database Table: restaurants]
+  restaurant_id  INT IDENTITY PK
+  name           VARCHAR(100)  NOT NULL
+  owner_name     VARCHAR(100)  NOT NULL  ← field Java="owner", cần @Column(name="owner_name")
+  phone          VARCHAR(11)   NOT NULL
+  address        VARCHAR(100)  NOT NULL
+  open_date      DATETIME2     NOT NULL  ← field Java="openDate", Hibernate tự convert OK
+  price_from     INT           NULLABLE  ← field Java="priceFrom", Hibernate tự convert OK
+  price_to       INT           NULLABLE  ← field Java="priceTo",   Hibernate tự convert OK
+  status         VARCHAR(10)   NOT NULL
+  category_id    INT           NOT NULL  ← field Java="categoryId", Hibernate tự convert OK
+
+[Cấu trúc package và class]
+  fa.training.restaurantservice
+  ├── RestaurantServiceApplication.java
+  │
+  ├── config/
+  │   └── SwaggerConfig.java
+  │         @Configuration
+  │         @Bean OpenAPI customOpenAPI()
+  │           .addServersItem(new Server().url("/restaurant-service").description("Gọi qua Gateway"))
+  │
+  ├── controller/
+  │   └── RestaurantController.java
+  │         @RestController @RequestMapping("/api")
+  │         POST   /api/restaurants           → create(RestaurantDTO)
+  │         PUT    /api/restaurants/{id}      → update(id, RestaurantDTO)
+  │         GET    /api/restaurants/{id}      → getDetail(id)
+  │         DELETE /api/restaurants/{id}      → deactivate(id) → set status=INACTIVE
+  │         GET    /api/restaurants           → getList(page, size, name, ownerName)
+  │         Tất cả: return ResponseEntity.ok(ApiResponse)
+  │
+  ├── dto/
+  │   ├── ApiResponse.java
+  │   │     @Getter @Setter @AllArgsConstructor
+  │   │     int status, String message, Object data
+  │   │     Convention: 1=success, 2=exception, 3=null field, 4=not found
+  │   │
+  │   ├── RestaurantDTO.java
+  │   │     @Data
+  │   │     Integer restaurantId, String name, String owner,
+  │   │     Integer priceFrom, Integer priceTo, String phone, String address,
+  │   │     @JsonFormat("dd/MM/yyyy") LocalDate openDate,
+  │   │     String status, Integer categoryId
+  │   │
+  │   └── PageDTO.java
+  │         @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
+  │         int size, int page, int totalPages, long totalElements,
+  │         boolean first, boolean last, List<?> content
+  │
+  ├── entity/
+  │   └── Restaurant.java
+  │         @Entity @Table(name="restaurants")
+  │         @Getter @Setter @AllArgsConstructor @NoArgsConstructor
+  │         @Id @GeneratedValue(IDENTITY)                         Integer restaurantId
+  │         @Column(nullable=false, length=100)                   String name
+  │         @Column(name="owner_name", nullable=false, length=100) String owner
+  │         (no @Column)                                          Integer priceFrom
+  │         (no @Column)                                          Integer priceTo
+  │         @Column(nullable=false, length=11)                    String phone
+  │         @Column(nullable=false, length=100)                   String address
+  │         @Column(nullable=false)                               LocalDate openDate
+  │         @Column(nullable=false, length=10)                    String status
+  │         @Column(nullable=false)                               Integer categoryId
+  │
+  ├── repository/
+  │   └── RestaurantRepository.java
+  │         extends JpaRepository<Restaurant, Integer>,
+  │                 JpaSpecificationExecutor<Restaurant>
+  │
+  ├── service/
+  │   ├── RestaurantService.java (interface)
+  │   │     create, update, getDetail, getList, deactivate
+  │   │
+  │   └── RestaurantServiceImpl.java (@Service)
+  │         mapDTO(entity→DTO): MyBeanUtils.copyNonNullProperties
+  │         mapToEntity(DTO→entity): MyBeanUtils.copyNonNullProperties
+  │         create: validate null → save → ApiResponse(1, "created", saved)
+  │         update: findById → copyNonNullProperties(dto→entity) → save
+  │         getDetail: findById → ApiResponse
+  │         getList: Pageable + Specification(contains name, owner) → Page → PageDTO
+  │         deactivate: findById → setStatus("INACTIVE") → save
+  │
+  ├── specification/
+  │   └── SearchSpecification.java (generic, dùng được cho mọi entity)
+  │         static <T> Specification<T> contains(String fieldName, String value)
+  │           → cb.like(lower(root.get(field)), "%value%")
+  │         static <T> Specification<T> equals(String fieldName, Object value)
+  │           → cb.equal(root.get(field), value)
+  │
+  └── util/
+      ├── MyBeanUtils.java
+      │     static void copyNonNullProperties(Object source, Object target)
+      │       → copy field từ source sang target, bỏ qua field null
+      │       → dùng BeanUtils.copyProperties + BeanWrapperImpl lọc null
+      │
+      └── PaginationUtils.java
+            static <T,D> PageDTO buildPageDTO(Page<T> page, List<D> dtoList)
+              → build PageDTO từ Spring Page + list DTO đã map
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. MODULE: food-service
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port     : 8082
+Package  : fa.training.foodservice
+Framework: Spring MVC (Servlet-based, Tomcat)
+
+[Dependencies pom.xml]
+  - spring-boot-starter-data-jpa
+  - spring-boot-starter-webmvc
+  - spring-boot-devtools (runtime, optional)
+  - mssql-jdbc (runtime)
+  - lombok (optional)
+  - spring-boot-starter-security  (đang tắt - permitAll)
+  - jjwt-api:0.11.5    (compile)
+  - jjwt-impl:0.11.5   (runtime)
+  - jjwt-jackson:0.11.5 (runtime)
+  - springdoc-openapi-starter-webmvc-ui:2.5.0
+
+[application.properties]
+  spring.application.name=food-service
+  server.port=8082
+  spring.datasource.url=jdbc:sqlserver://localhost:1433;databaseName=<DB_NAME>;encrypt=false;
+  spring.datasource.username=sa
+  spring.datasource.password=<PASSWORD>
+  spring.datasource.driver-class-name=com.microsoft.sqlserver.jdbc.SQLServerDriver
+  spring.jpa.hibernate.ddl-auto=update
+  spring.jpa.show-sql=true
+  server.forward-headers-strategy=framework
+
+[Database Table: Foods]
+  food_id        INT IDENTITY PK         ← field Java="foodId"
+  name           NVARCHAR(100) NOT NULL
+  price          INT           NOT NULL  ← kiểu Integer (KHÔNG phải Double)
+  ingredient     NVARCHAR(500) NOT NULL  ← KHÔNG có chữ 's' ở cuối
+  restaurant_id  INT           NOT NULL  ← field Java="restaurantId"
+  status         NVARCHAR(20)  NOT NULL  ← CHECK: 'ACTIVE' hoặc 'INACTIVE'
+
+[Cấu trúc package và class]
+  fa.training.foodservice
+  ├── FoodServiceApplication.java
+  │
+  ├── config/
+  │   └── SwaggerConfig.java
+  │         (tương tự restaurant, url="/food-service")
+  │
+  ├── controller/
+  │   └── FoodController.java
+  │         @RestController @RequestMapping("/api")
+  │         POST   /api/foods            → createFood(FoodDTO)
+  │         PUT    /api/foods/{id}       → updateFood(id, FoodDTO)
+  │         GET    /api/food/{id}        → getFoodDetail(id)  [singular "food"]
+  │         DELETE /api/deactivate/{id}  → deactivateFood(id)
+  │         GET    /api/foods            → getFoods(page, size, name, ingredients)
+  │         Tất cả: return ResponseEntity.ok(ApiResponse)
+  │
+  ├── dto/
+  │   ├── ApiResponse.java (giống restaurant-service)
+  │   │
+  │   ├── FoodDTO.java
+  │   │     @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
+  │   │     Integer foodId, String name, Integer price,
+  │   │     String ingredient, Integer restaurantId, String status
+  │   │
+  │   └── PageDTO.java (giống restaurant-service)
+  │
+  ├── entity/
+  │   └── Food.java
+  │         @Entity @Table(name="Foods")
+  │         @Getter @Setter @Builder @AllArgsConstructor @NoArgsConstructor
+  │         @Id @GeneratedValue(IDENTITY)                        Integer foodId
+  │         @Column(name="name", nullable=false, length=100)     String name
+  │         @Column(nullable=false)                              Integer price
+  │         @Column(name="ingredient", nullable=false, length=500) String ingredient
+  │         @Column(name="restaurant_id", nullable=false)        Integer restaurantId
+  │         @Column(name="status", nullable=false)               String status
+  │
+  ├── repository/
+  │   └── FoodRepository.java
+  │         extends JpaRepository<Food, Integer>,
+  │                 JpaSpecificationExecutor<Food>
+  │
+  ├── service/
+  │   ├── FoodService.java (interface)
+  │   └── FoodServiceImpl.java (@Service)
+  │         mapDTO: build FoodDTO từ entity (dùng builder)
+  │         mapToEntity: build Food từ DTO (dùng builder)
+  │         createFood: validate name/price/restaurantId null → KHÔNG check foodId → save
+  │         updateFood: findById → set từng field nếu not null → save
+  │         getFoodDetail: findById → ApiResponse
+  │         getFoodList: Pageable + FoodSpecification → Page → PageDTO
+  │         deactiveFood: findById → setStatus("INACTIVE") → save
+  │
+  ├── specification/
+  │   └── FoodSpecification.java
+  │         static Specification<Food> getFoodSpecification(String name, String ingredients)
+  │           → List<Predicate>, cb.and() ghép điều kiện
+  │           → LIKE %name%, LIKE %ingredients%
+  │
+  └── util/
+      └── JwtUtil.java  (JWT helper - chưa dùng vì security đang tắt)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. QUY TẮC QUAN TRỌNG KHI TẠO SERVICE MỚI TƯƠNG TỰ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[A] ENTITY - @Column mapping
+  - Hibernate SpringPhysicalNamingStrategy: tự convert camelCase → snake_case
+  - Chỉ thêm @Column(name="...") khi tên cột DB KHÁC với kết quả tự convert
+  - Ví dụ: "owner" → Hibernate đoán "owner", DB là "owner_name" → cần @Column
+  - Ví dụ: "openDate" → Hibernate đoán "open_date" = đúng → không cần @Column
+  - KHÔNG viết @Column(name="camelCase") vì Hibernate dùng đúng tên đó (sai)
+
+[B] DTO
+  - Nếu dùng @Builder → phải thêm @NoArgsConstructor + @AllArgsConstructor
+    Lý do: Jackson cần no-arg constructor để deserialize JSON → object
+  - Dùng @Data hoặc @Getter+@Setter cho DTO nhận request body
+
+[C] Controller
+  - Dùng ResponseEntity.ok(apiResponse) KHÔNG dùng ResponseEntity.status(businessCode)
+    Lý do: getStatus() trả về 1,2,3,4 → không phải HTTP status code hợp lệ → lỗi
+
+[D] Service createXxx
+  - KHÔNG validate null cho field Id (auto-generated, client không truyền)
+  - Chỉ validate các field bắt buộc theo business
+
+[E] SwaggerConfig - BẮT BUỘC mỗi service
+  @Bean OpenAPI customOpenAPI()
+    .addServersItem(new Server().url("/<prefix-của-service-trong-gateway>"))
+
+[F] application.properties - BẮT BUỘC
+  server.forward-headers-strategy=framework
+  (Swagger cần biết request đến qua gateway prefix nào để generate URL đúng)
+
+[G] Gateway - thêm route khi có service mới
+  Thêm vào application.yml VÀ GatewayConfig.java:
+    path: /<tên-service>/**
+    rewrite: cắt bỏ /<tên-service>/ prefix
+    uri: http://localhost:<port>
+
+[H] @Table name - phải khớp chính xác tên bảng trong DB
+  Kiểm tra: SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. API RESPONSE FORMAT CHUẨN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Single object:
+  { "status": 1, "message": "...", "data": { ... } }
+
+Danh sách (PageDTO):
+  {
+    "status": 1,
+    "message": "Success",
+    "data": {
+      "size": 10, "page": 0,
+      "totalPages": 5, "totalElements": 47,
+      "first": true, "last": false,
+      "content": [ ... ]
+    }
+  }
+
+Status code convention:
+  1 = success
+  2 = exception (catch block)
+  3 = required field is null
+  4 = entity not found
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. CHECKLIST KHI TẠO SERVICE MỚI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[ ] 1. Tạo Spring Boot project với dependencies phù hợp
+[ ] 2. Cấu hình application.properties (port, datasource, ddl-auto, forward-headers-strategy)
+[ ] 3. Tạo Entity: đối chiếu field với DB script, thêm @Column(name=) khi tên khác
+[ ] 4. Tạo Repository: extends JpaRepository + JpaSpecificationExecutor
+[ ] 5. Tạo ApiResponse, DTO (chú ý @NoArgsConstructor nếu có @Builder), PageDTO
+[ ] 6. Tạo Service interface + ServiceImpl
+[ ] 7. Tạo Controller (dùng ResponseEntity.ok() cho tất cả)
+[ ] 8. Tạo Specification cho filter động
+[ ] 9. Copy MyBeanUtils, PaginationUtils nếu cần (từ restaurant-service)
+[ ] 10. Tạo SwaggerConfig với server URL = gateway prefix của service này
+[ ] 11. Thêm route mới vào gateway (application.yml + GatewayConfig.java)
+
+================================================================================
